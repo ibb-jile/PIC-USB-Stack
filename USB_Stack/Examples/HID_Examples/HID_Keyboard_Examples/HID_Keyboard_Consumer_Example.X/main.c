@@ -400,9 +400,12 @@ void usb_sof(void)
             m_idle_counter++;
         }
 
-        // Enter sleep mode after timeout
+        // Enter sleep mode after timeout (LED off, but CPU continues for USB)
         if(m_idle_counter >= IDLE_TIMEOUT_MS && !m_is_sleeping) {
             m_is_sleeping = true;
+            // LED is already off via main loop
+            // CPU continues to handle USB communication
+            // Button press will wake it up and turn LED back on
         }
     }
 }
