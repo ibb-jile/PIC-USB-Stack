@@ -114,6 +114,14 @@
 #define BUTTON_B_WAS_PRESSED  (BUTTON_B_PRESSED && m_released_b)
 #define BUTTON_B_WAS_RELEASED (BUTTON_B_RELEASED && !m_released_b)
 
+// Status LED on RA5 definitions
+#define STATUS_LED_BIT 5
+#define STATUS_LED_LAT LATA
+#define STATUS_LED_TRIS TRISA
+#define STATUS_LED_ON()  STATUS_LED_LAT |= (1 << STATUS_LED_BIT)
+#define STATUS_LED_OFF() STATUS_LED_LAT &= ~(1 << STATUS_LED_BIT)
+#define STATUS_LED_OUTPUT() STATUS_LED_TRIS &= ~(1 << STATUS_LED_BIT)
+
 static void example_init(void);
 #ifdef USE_BOOT_LED
 static void flash_led(void);
@@ -127,6 +135,11 @@ static bool m_released_a = true;
 static bool m_released_b = true;
 static bool m_send_report0 = false, m_send_report1 = false;
 
+// Sleep mode management
+static uint16_t m_idle_counter = 0;
+#define IDLE_TIMEOUT 30000  // ~30 seconds of inactivity
+static bool m_is_sleeping = false;
+
 void main(void)
 {
     example_init();
@@ -137,7 +150,10 @@ void main(void)
 	#endif
     
     usb_init();
-    
+
+    // Initialize status LED (active mode at startup)
+    STATUS_LED_ON();
+
     // Comment out the following for polling method.
     INTCONbits.PEIE = 1;
     USB_INTERRUPT_FLAG = 0;
@@ -151,23 +167,30 @@ void main(void)
     while(1)
     {
         // Uncomment out the following for polling method.
-        //usb_tasks(); 
-        
-        if(usb_get_state() != STATE_CONFIGURED) continue;  
-        
+        //usb_tasks();
+
+        if(usb_get_state() != STATE_CONFIGURED) {
+            m_idle_counter = 0;
+            continue;
+        }
+
         service_reports_to_send();
-        
+
+        bool button_activity = false;
+
         // Keyboard Example - RB6 button sends "A"
         if(g_hid_sent_report[0] == true && g_hid_report_sent)
         {
             if(BUTTON_A_WAS_PRESSED)
             {
+                button_activity = true;
                 m_released_a = false;
                 ascii_2_key('A');
                 send_key(g_key_result.Modifier, g_key_result.KeyCode);
             }
             else if(BUTTON_A_WAS_RELEASED)
             {
+                button_activity = true;
                 m_released_a = true;
                 send_key(0,0);
             }
@@ -175,15 +198,46 @@ void main(void)
             // RB7 button sends "B"
             if(BUTTON_B_WAS_PRESSED)
             {
+                button_activity = true;
                 m_released_b = false;
                 ascii_2_key('B');
                 send_key(g_key_result.Modifier, g_key_result.KeyCode);
             }
             else if(BUTTON_B_WAS_RELEASED)
             {
+                button_activity = true;
                 m_released_b = true;
                 send_key(0,0);
             }
+        }
+
+        // Sleep mode management
+        if(button_activity) {
+            m_idle_counter = 0;
+            if(m_is_sleeping) {
+                m_is_sleeping = false;  // Wake up from sleep
+            }
+        } else {
+            m_idle_counter++;
+
+            if(m_idle_counter >= IDLE_TIMEOUT && !m_is_sleeping) {
+                m_is_sleeping = true;
+                STATUS_LED_OFF();  // Turn off LED before sleep
+
+                // Enter idle mode (CPU off, oscillator continues for USB)
+                asm("SLEEP");
+
+                // After waking up
+                m_idle_counter = 0;
+                m_is_sleeping = false;
+            }
+        }
+
+        // Update LED based on sleep state (not activity)
+        if(m_is_sleeping) {
+            STATUS_LED_OFF();
+        } else {
+            STATUS_LED_ON();
         }
     }
 }
@@ -237,8 +291,15 @@ static void example_init(void)
     #endif
 
     
+    // Configure status LED on RA5
+    #if defined(_PIC14E)
+    ANSELA &= ~(1 << 5);  // RA5 as digital pin
+    #endif
+    STATUS_LED_OUTPUT();
+    STATUS_LED_OFF();
+
     // Make boot pin digital.
-    #if defined(BUTTON_ANSEL) 
+    #if defined(BUTTON_ANSEL)
     BUTTON_ANSEL &= ~(1<<BUTTON_ANSEL_BIT);
     #elif defined(BUTTON_ANCON)
     BUTTON_ANCON |= (1<<BUTTON_ANCON_BIT);
@@ -291,6 +352,15 @@ static void example_init(void)
     BUTTON_WPU |= (1 << BUTTON_WPU_BIT);
     BUTTON_RXPU_REG &= ~(1 << BUTTON_RXPU_BIT);
     #endif
+    #endif
+
+    // Configure Interrupt-on-Change for buttons RB6, RB7 (wakeup from sleep)
+    #if defined(_16F1459)
+    IOCBPbits.IOCBP6 = 1;  // IOC on positive edge (button release) RB6
+    IOCBPbits.IOCBP7 = 1;  // IOC on positive edge (button release) RB7
+    IOCBNbits.IOCBN6 = 1;  // IOC on negative edge (button press) RB6
+    IOCBNbits.IOCBN7 = 1;  // IOC on negative edge (button press) RB7
+    INTCONbits.IOCIE = 1;  // Enable IOC interrupt
     #endif
 }
 
@@ -358,5 +428,19 @@ static void __interrupt() isr(void)
     if(USB_INTERRUPT_ENABLE && USB_INTERRUPT_FLAG){
         usb_tasks();
         USB_INTERRUPT_FLAG = 0;
+    }
+
+    // IOC interrupt for waking up from sleep
+    if(INTCONbits.IOCIE && INTCONbits.IOCIF) {
+        // Clear IOC flags on PORTB
+        if(IOCBFbits.IOCBF6) IOCBFbits.IOCBF6 = 0;
+        if(IOCBFbits.IOCBF7) IOCBFbits.IOCBF7 = 0;
+        INTCONbits.IOCIF = 0;
+
+        // Process USB tasks after waking up to restore communication
+        if(USB_INTERRUPT_ENABLE && USB_INTERRUPT_FLAG) {
+            usb_tasks();
+            USB_INTERRUPT_FLAG = 0;
+        }
     }
 }
