@@ -136,8 +136,8 @@ static bool m_released_b = true;
 static bool m_send_report0 = false, m_send_report1 = false;
 
 // Sleep mode management
-static uint16_t m_idle_counter = 0;
-#define IDLE_TIMEOUT 30000  // ~30 seconds of inactivity
+static uint16_t m_idle_counter = 0;  // Incremented in SOF (every 1ms)
+#define IDLE_TIMEOUT_MS 30000  // 30 seconds of USB inactivity
 static bool m_is_sleeping = false;
 
 void main(void)
@@ -211,29 +211,15 @@ void main(void)
             }
         }
 
-        // Sleep mode management
+        // Sleep mode management - based on USB SOF inactivity
         if(button_activity) {
-            m_idle_counter = 0;
+            m_idle_counter = 0;  // Reset on any button activity
             if(m_is_sleeping) {
-                m_is_sleeping = false;  // Wake up from sleep
-            }
-        } else {
-            m_idle_counter++;
-
-            if(m_idle_counter >= IDLE_TIMEOUT && !m_is_sleeping) {
-                m_is_sleeping = true;
-                STATUS_LED_OFF();  // Turn off LED before sleep
-
-                // Enter idle mode (CPU off, oscillator continues for USB)
-                asm("SLEEP");
-
-                // After waking up
-                m_idle_counter = 0;
-                m_is_sleeping = false;
+                m_is_sleeping = false;  // Wake up
             }
         }
 
-        // Update LED based on sleep state (not activity)
+        // Update LED based on sleep state
         if(m_is_sleeping) {
             STATUS_LED_OFF();
         } else {
@@ -407,6 +393,18 @@ static void send_consumer(uint8_t consumer_val)
 void usb_sof(void)
 {
     hid_service_sof();
+
+    // Increment idle counter (called every 1ms by USB host)
+    if(!m_is_sleeping) {
+        if(m_idle_counter < IDLE_TIMEOUT_MS) {
+            m_idle_counter++;
+        }
+
+        // Enter sleep mode after timeout
+        if(m_idle_counter >= IDLE_TIMEOUT_MS && !m_is_sleeping) {
+            m_is_sleeping = true;
+        }
+    }
 }
 
 void hid_out(uint8_t report_num)
@@ -430,17 +428,17 @@ static void __interrupt() isr(void)
         USB_INTERRUPT_FLAG = 0;
     }
 
-    // IOC interrupt for waking up from sleep
+    // IOC interrupt for button wakeup from sleep
     if(INTCONbits.IOCIE && INTCONbits.IOCIF) {
         // Clear IOC flags on PORTB
         if(IOCBFbits.IOCBF6) IOCBFbits.IOCBF6 = 0;
         if(IOCBFbits.IOCBF7) IOCBFbits.IOCBF7 = 0;
         INTCONbits.IOCIF = 0;
 
-        // Process USB tasks after waking up to restore communication
-        if(USB_INTERRUPT_ENABLE && USB_INTERRUPT_FLAG) {
-            usb_tasks();
-            USB_INTERRUPT_FLAG = 0;
+        // Wake up from sleep on button press
+        if(m_is_sleeping) {
+            m_is_sleeping = false;
+            m_idle_counter = 0;
         }
     }
 }
