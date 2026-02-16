@@ -400,12 +400,16 @@ void usb_sof(void)
             m_idle_counter++;
         }
 
-        // Enter sleep mode after timeout (LED off, but CPU continues for USB)
+        // Enter sleep mode after timeout (CPU and oscillator off)
         if(m_idle_counter >= IDLE_TIMEOUT_MS && !m_is_sleeping) {
             m_is_sleeping = true;
-            // LED is already off via main loop
-            // CPU continues to handle USB communication
-            // Button press will wake it up and turn LED back on
+            // Turn off LED before sleep
+            STATUS_LED_OFF();
+
+            // Enter SLEEP mode - CPU and oscillator off
+            // Will be woken by IOC interrupt (button press)
+            // USB will reconnect after wakeup
+            __asm__ volatile("sleep");
         }
     }
 }
@@ -442,6 +446,10 @@ static void __interrupt() isr(void)
         if(m_is_sleeping) {
             m_is_sleeping = false;
             m_idle_counter = 0;
+
+            // Allow oscillator to stabilize after wakeup from sleep
+            // USB will reconnect after oscillator is stable
+            __delay_ms(100);
         }
     }
 }
