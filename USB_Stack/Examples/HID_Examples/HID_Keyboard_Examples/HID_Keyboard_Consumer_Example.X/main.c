@@ -98,8 +98,21 @@
 #include "usb_hid_reports.h"
 #include "ascii_2_key.h"
 
-#define BUTTON_WAS_PRESSED  (BUTTON_PRESSED && m_released)
-#define BUTTON_WAS_RELEASED (BUTTON_RELEASED && !m_released)
+// RB6 and RB7 button definitions
+#define BUTTON_A_PORT_BIT  6
+#define BUTTON_A_PORT      PORTB
+#define BUTTON_A_PRESSED   (~BUTTON_A_PORT & (1 << BUTTON_A_PORT_BIT))
+#define BUTTON_A_RELEASED  (BUTTON_A_PORT & (1 << BUTTON_A_PORT_BIT))
+
+#define BUTTON_B_PORT_BIT  7
+#define BUTTON_B_PORT      PORTB
+#define BUTTON_B_PRESSED   (~BUTTON_B_PORT & (1 << BUTTON_B_PORT_BIT))
+#define BUTTON_B_RELEASED  (BUTTON_B_PORT & (1 << BUTTON_B_PORT_BIT))
+
+#define BUTTON_A_WAS_PRESSED  (BUTTON_A_PRESSED && m_released_a)
+#define BUTTON_A_WAS_RELEASED (BUTTON_A_RELEASED && !m_released_a)
+#define BUTTON_B_WAS_PRESSED  (BUTTON_B_PRESSED && m_released_b)
+#define BUTTON_B_WAS_RELEASED (BUTTON_B_RELEASED && !m_released_b)
 
 static void example_init(void);
 #ifdef USE_BOOT_LED
@@ -110,8 +123,8 @@ static void send_key(uint8_t modifier, uint8_t key_code);
 static void send_consumer(uint8_t consumer_val);
 static void service_reports_to_send(void);
 
-static const uint8_t m_message[] = "Hello World!\r";
-static bool m_released = true;
+static bool m_released_a = true;
+static bool m_released_b = true;
 static bool m_send_report0 = false, m_send_report1 = false;
 
 void main(void)
@@ -144,39 +157,34 @@ void main(void)
         
         service_reports_to_send();
         
-        // Uncomment the following for Keyboard Example
+        // Keyboard Example - RB6 button sends "A"
         if(g_hid_sent_report[0] == true && g_hid_report_sent)
         {
-            if(BUTTON_WAS_PRESSED)
+            if(BUTTON_A_WAS_PRESSED)
             {
-                m_released = false;
-                ascii_2_key(m_message[i]);
+                m_released_a = false;
+                ascii_2_key('A');
                 send_key(g_key_result.Modifier, g_key_result.KeyCode);
-
             }
-            else if(BUTTON_WAS_RELEASED)
+            else if(BUTTON_A_WAS_RELEASED)
             {
-                m_released = true;
+                m_released_a = true;
                 send_key(0,0);
-                i++;
-                if(m_message[i] == 0) i = 0;
+            }
+
+            // RB7 button sends "B"
+            if(BUTTON_B_WAS_PRESSED)
+            {
+                m_released_b = false;
+                ascii_2_key('B');
+                send_key(g_key_result.Modifier, g_key_result.KeyCode);
+            }
+            else if(BUTTON_B_WAS_RELEASED)
+            {
+                m_released_b = true;
+                send_key(0,0);
             }
         }
-        
-        // Uncomment the following for Consumer Example
-//        if(g_hid_sent_report[1] == true && g_hid_report_sent)
-//        {
-//            if(BUTTON_WAS_PRESSED)
-//            {
-//                m_released = false;
-//                send_consumer(_MUTE);
-//            }
-//            else if(BUTTON_WAS_RELEASED)
-//            {
-//                m_released = true;
-//                send_consumer(0);
-//            }
-//        }
     }
 }
 
@@ -243,6 +251,8 @@ static void example_init(void)
     WPUA = 0;
     #if defined(_16F1459)
     WPUB = 0;
+    // Enable weak pull-ups for RB6 and RB7 (custom buttons)
+    WPUB |= (1 << 6) | (1 << 7);
     #endif
     BUTTON_WPU |= (1 << BUTTON_WPU_BIT);
     OPTION_REGbits.nWPUEN = 0;
